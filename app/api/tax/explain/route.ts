@@ -1,17 +1,18 @@
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { getAuthenticatedXero } from "@/app/lib/xero-auth";
-import { analyseDeductions } from "@/app/lib/tax-engine";
 import { getEnv } from "@/app/lib/env";
 import { systemBlocks } from "@/app/lib/skills";
+import { getCachedAnalysis } from "@/app/lib/xero-cache";
+import { getAuthenticatedXero } from "@/app/lib/xero-auth";
+import { resolveTenant } from "@/app/lib/tenant";
+import {
+  appendMessage,
+  getOrCreateActiveConversation,
+  loadMessages,
+} from "@/app/lib/chat-store";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-
-interface ChatTurn {
-  role: "user" | "assistant";
-  content: string;
-}
 
 interface UploadedDoc {
   kind: "pdf" | "csv";
@@ -27,6 +28,8 @@ type ContentBlock =
       source: { type: "base64"; media_type: "application/pdf"; data: string };
       title?: string;
     };
+
+const HISTORY_WINDOW = 10;
 
 function buildInitialUserPrompt(orgName: string, analysisData: unknown): string {
   return `Analyse the tax deductions for ${orgName}. Here is their financial data from Xero:
@@ -73,53 +76,38 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const userQuestion: string = body.question || "Analyse my tax deductions";
-    const isFollowUp: boolean = body.isFollowUp === true;
-    const history: ChatTurn[] = Array.isArray(body.history) ? body.history : [];
     const uploads: UploadedDoc[] = Array.isArray(body.uploads) ? body.uploads : [];
+    const forceRefresh: boolean = body.refresh === true;
 
-    const { xero, tenantId } = await getAuthenticatedXero();
+    // Auth + tenant (one resolve serves the whole request)
+    const { tenantId: xeroTenantId } = await getAuthenticatedXero();
 
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    const dateFilter = `Date >= DateTime(${oneYearAgo.getFullYear()}, ${oneYearAgo.getMonth() + 1}, ${oneYearAgo.getDate()})`;
-    const now = new Date();
-    const fromDate = `${now.getFullYear() - 1}-04-01`;
-    const toDate = `${now.getFullYear()}-03-31`;
-    const today = now.toISOString().split("T")[0];
+    // Xero data pull (cached)
+    const { result: analysisResult, cached } = await getCachedAnalysis({ forceRefresh });
+    const orgName = analysisResult.orgName;
 
-    const [txRes, pnlRes, bsRes, contactsRes, orgRes] = await Promise.all([
-      xero.accountingApi.getBankTransactions(tenantId, undefined, dateFilter),
-      xero.accountingApi.getReportProfitAndLoss(tenantId, fromDate, toDate),
-      xero.accountingApi.getReportBalanceSheet(tenantId, today),
-      xero.accountingApi.getContacts(tenantId, undefined, "IsSupplier==true"),
-      xero.accountingApi.getOrganisations(tenantId),
-    ]);
+    // Ensure tenant row exists with current org name
+    const tenant = await resolveTenant(xeroTenantId, orgName);
+    const conversation = await getOrCreateActiveConversation(tenant.id);
 
-    const orgName = orgRes.body.organisations?.[0]?.name || "Your Organisation";
+    // Load server-side history. This is the source of truth, not the client.
+    const priorMessages = await loadMessages({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+    });
+    const isFollowUp = priorMessages.some((m) => m.metadata?.analysisData);
 
-    const transactions = (txRes.body.bankTransactions || []).map((tx) => ({
-      total: tx.total,
-      contact: tx.contact?.name,
-      type: tx.type?.toString(),
-      lineItems: (tx.lineItems || []).map((li) => ({
-        description: li.description,
-        amount: li.lineAmount,
-        accountCode: li.accountCode,
-      })),
-    }));
-
-    const contacts = (contactsRes.body.contacts || []).map((c) => ({
-      name: c.name,
-      isSupplier: c.isSupplier,
-    }));
-
-    const analysisResult = analyseDeductions(
-      orgName,
-      transactions,
-      pnlRes.body.reports?.[0] || null,
-      bsRes.body.reports?.[0] || null,
-      contacts
-    );
+    // Persist the user turn immediately so a dropped connection doesn't lose it.
+    await appendMessage({
+      tenantId: tenant.id,
+      conversationId: conversation.id,
+      role: "user",
+      content: userQuestion,
+      metadata:
+        uploads.length > 0
+          ? { attachments: uploads.map((u) => ({ name: u.name, kind: u.kind })) }
+          : undefined,
+    });
 
     const apiKey = getEnv("ANTHROPIC_API_KEY");
     if (!apiKey) {
@@ -132,11 +120,11 @@ export async function POST(request: NextRequest) {
     const client = new Anthropic({ apiKey });
     const model = getEnv("CLAUDE_MODEL") || "claude-sonnet-4-6";
 
-    // Assemble messages: prior history (trimmed) + current turn
-    const trimmedHistory = history
-      .slice(-10)
-      .filter((t) => t.role === "user" || t.role === "assistant")
-      .map((t) => ({ role: t.role, content: t.content }));
+    // Thread last N turns into Claude's context from the DB
+    const trimmedHistory = priorMessages.slice(-HISTORY_WINDOW).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
 
     const currentText = isFollowUp
       ? buildFollowUpPrompt(userQuestion, analysisResult)
@@ -147,7 +135,7 @@ export async function POST(request: NextRequest) {
       { type: "text", text: currentText },
     ];
 
-    const messages = [
+    const messagesForClaude = [
       ...trimmedHistory,
       { role: "user" as const, content: currentContent },
     ];
@@ -156,7 +144,7 @@ export async function POST(request: NextRequest) {
       model,
       max_tokens: 2048,
       system: systemBlocks(),
-      messages,
+      messages: messagesForClaude,
     });
 
     return new Response(
@@ -167,6 +155,7 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
 
           try {
+            send({ type: "meta", cached });
             if (!isFollowUp) {
               send({ type: "analysis", data: analysisResult });
             }
@@ -182,12 +171,28 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            // Generate 3 follow-up questions based on the answer
+            let followUps: string[] = [];
             try {
-              const followUps = await generateFollowUps(client, model, fullText, analysisResult);
+              followUps = await generateFollowUps(client, model, fullText, analysisResult);
               send({ type: "followUps", questions: followUps });
             } catch (err) {
               console.error("Follow-up generation failed:", err);
+            }
+
+            // Persist the assistant turn with metadata
+            try {
+              await appendMessage({
+                tenantId: tenant.id,
+                conversationId: conversation.id,
+                role: "assistant",
+                content: fullText,
+                metadata: {
+                  ...(isFollowUp ? {} : { analysisData: analysisResult }),
+                  ...(followUps.length > 0 ? { followUps } : {}),
+                },
+              });
+            } catch (err) {
+              console.error("Failed to persist assistant message:", err);
             }
 
             send({ type: "done" });
@@ -248,7 +253,6 @@ async function generateFollowUps(
       ? (resp.content.find((b) => b.type === "text") as { text: string }).text
       : "";
 
-  // Strip code fences if present
   const cleaned = text.replace(/```(?:json)?\s*/g, "").replace(/```/g, "").trim();
   const jsonStart = cleaned.indexOf("[");
   const jsonEnd = cleaned.lastIndexOf("]");

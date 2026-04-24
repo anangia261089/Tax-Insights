@@ -24,8 +24,17 @@ interface ChatMessage {
   followUps?: string[];
 }
 
-const HISTORY_KEY = "jax.chat.history.v1";
-const MAX_HISTORY_TURNS = 20;
+interface ServerMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  metadata?: {
+    analysisData?: TaxAnalysisResult;
+    attachments?: { name: string; kind: "pdf" | "csv" }[];
+    followUps?: string[];
+  };
+}
 
 function formatCurrency(n: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -33,6 +42,24 @@ function formatCurrency(n: number): string {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(n);
+}
+
+function serverToChat(m: ServerMessage): ChatMessage {
+  if (m.role === "user") {
+    return {
+      role: "user",
+      content: m.content,
+      attachments: m.metadata?.attachments,
+    };
+  }
+  return {
+    role: "assistant",
+    content: m.metadata?.analysisData ? "" : m.content,
+    streamedText: m.metadata?.analysisData ? m.content : undefined,
+    analysisData: m.metadata?.analysisData,
+    followUps: m.metadata?.followUps,
+    isStreaming: false,
+  };
 }
 
 function seedFollowUps(data: TaxAnalysisResult): string[] {
@@ -75,57 +102,28 @@ export default function Dashboard() {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  // Load persisted history from localStorage
+  // Load conversation from server on mount
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(HISTORY_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as ChatMessage[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Strip transient flags
-          setMessages(
-            parsed.map((m) => ({ ...m, isStreaming: false, loading: false }))
-          );
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  // Persist history whenever it changes (skip transient streaming states)
-  useEffect(() => {
-    if (messages.length === 0) return;
-    const anyStreaming = messages.some((m) => m.isStreaming || m.loading);
-    if (anyStreaming) return;
-    try {
-      // Keep only the last N turns to stay under localStorage quota
-      const trimmed = messages.slice(-MAX_HISTORY_TURNS * 2);
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
-    } catch {
-      // ignore quota errors
-    }
-  }, [messages]);
-
-  useEffect(() => {
-    fetch("/api/xero/org")
+    fetch("/api/chat/history")
       .then(async (res) => {
         if (res.status === 401) {
           window.location.href = "/api/auth/login";
           return;
         }
-        if (!res.ok) throw new Error("Failed to connect");
-        const data = await res.json();
-        setOrgName(data.name);
-        setMessages((prev) => {
-          if (prev.length > 0) return prev;
-          return [
+        if (!res.ok) throw new Error("Failed to load history");
+        const data: { orgName: string | null; messages: ServerMessage[] } = await res.json();
+        setOrgName(data.orgName || "your organisation");
+
+        if (data.messages.length === 0) {
+          setMessages([
             {
               role: "assistant",
-              content: `Hi! I'm connected to **${data.name}**. I can analyse your tax deductions, find missed opportunities, and explain everything in plain English. You can also upload receipts (PDF) or exports (CSV) and I'll factor them in.\n\nWhat would you like to know?`,
+              content: `Hi! I'm connected to **${data.orgName || "your business"}**. I can analyse your tax deductions, find missed opportunities, and explain everything in plain English. You can also upload receipts (PDF) or exports (CSV) and I'll factor them in.\n\nWhat would you like to know?`,
             },
-          ];
-        });
+          ]);
+        } else {
+          setMessages(data.messages.map(serverToChat));
+        }
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
@@ -133,15 +131,22 @@ export default function Dashboard() {
 
   const hasShownAnalysis = messages.some((m) => m.analysisData);
 
-  function clearHistory() {
-    if (!confirm("Clear the conversation? This cannot be undone.")) return;
-    localStorage.removeItem(HISTORY_KEY);
-    setMessages([
-      {
-        role: "assistant",
-        content: `Hi! I'm connected to **${orgName}**. What would you like to know?`,
-      },
-    ]);
+  async function clearHistory() {
+    if (!confirm("Clear the conversation? This deletes all prior messages for this organisation.")) {
+      return;
+    }
+    try {
+      const res = await fetch("/api/chat/history", { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to clear");
+      setMessages([
+        {
+          role: "assistant",
+          content: `Hi! I'm connected to **${orgName}**. What would you like to know?`,
+        },
+      ]);
+    } catch {
+      setError("Failed to clear conversation. Please try again.");
+    }
   }
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -164,7 +169,6 @@ export default function Dashboard() {
         setUploadError("Upload failed");
       }
     }
-    // Reset input so same file can be re-selected
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -172,21 +176,12 @@ export default function Dashboard() {
     setPendingUploads((prev) => prev.filter((d) => d.name !== name));
   }
 
-  async function runAnalysis(question: string) {
+  async function runAnalysis(question: string, opts: { refresh?: boolean } = {}) {
     if (isAnalysing) return;
     setIsAnalysing(true);
 
-    const isFollowUp = hasShownAnalysis;
     const uploadsForTurn = pendingUploads;
     setPendingUploads([]);
-
-    // Build history payload (text only, server side strips attachments)
-    const history = messages
-      .filter((m) => !m.loading && (m.content || m.streamedText))
-      .map((m) => ({
-        role: m.role,
-        content: m.role === "user" ? m.content : m.streamedText || m.content,
-      }));
 
     const userMsg: ChatMessage = {
       role: "user",
@@ -203,9 +198,8 @@ export default function Dashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           question,
-          isFollowUp,
-          history,
           uploads: uploadsForTurn,
+          refresh: opts.refresh === true,
         }),
       });
 
@@ -325,7 +319,7 @@ export default function Dashboard() {
         <main className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <div className="w-10 h-10 border-2 border-[#00B7A3] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-sm text-gray-500">Connecting to Xero...</p>
+            <p className="text-sm text-gray-500">Loading your conversation...</p>
           </div>
         </main>
       ) : error ? (
@@ -342,7 +336,18 @@ export default function Dashboard() {
           <main className="flex-1 overflow-y-auto">
             <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
               {messages.length > 1 && (
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-4">
+                  {hasShownAnalysis && (
+                    <button
+                      onClick={() =>
+                        runAnalysis("Re-analyse with the latest Xero data", { refresh: true })
+                      }
+                      disabled={isAnalysing}
+                      className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                    >
+                      Refresh Xero data
+                    </button>
+                  )}
                   <button
                     onClick={clearHistory}
                     className="text-xs text-gray-400 hover:text-gray-600"
