@@ -12,6 +12,9 @@
     },
     "app/api/tax/upload/route.ts": {
       "maxDuration": 30
+    },
+    "app/api/chat/history/route.ts": {
+      "maxDuration": 15
     }
   }
 }
