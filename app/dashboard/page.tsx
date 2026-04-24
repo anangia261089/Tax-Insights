@@ -172,7 +172,7 @@ export default function Dashboard() {
     setPendingUploads((prev) => prev.filter((d) => d.name !== name));
   }
 
-  async function runAnalysis(question: string) {
+  async function runAnalysis(question: string, opts: { refresh?: boolean } = {}) {
     if (isAnalysing) return;
     setIsAnalysing(true);
 
@@ -206,6 +206,7 @@ export default function Dashboard() {
           isFollowUp,
           history,
           uploads: uploadsForTurn,
+          refresh: opts.refresh === true,
         }),
       });
 
@@ -342,7 +343,18 @@ export default function Dashboard() {
           <main className="flex-1 overflow-y-auto">
             <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
               {messages.length > 1 && (
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-4">
+                  {hasShownAnalysis && (
+                    <button
+                      onClick={() =>
+                        runAnalysis("Re-analyse with the latest Xero data", { refresh: true })
+                      }
+                      disabled={isAnalysing}
+                      className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
+                    >
+                      Refresh Xero data
+                    </button>
+                  )}
                   <button
                     onClick={clearHistory}
                     className="text-xs text-gray-400 hover:text-gray-600"

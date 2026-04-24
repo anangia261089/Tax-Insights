@@ -1,9 +1,8 @@
 import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
-import { getAuthenticatedXero } from "@/app/lib/xero-auth";
-import { analyseDeductions } from "@/app/lib/tax-engine";
 import { getEnv } from "@/app/lib/env";
 import { systemBlocks } from "@/app/lib/skills";
+import { getCachedAnalysis } from "@/app/lib/xero-cache";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -76,50 +75,10 @@ export async function POST(request: NextRequest) {
     const isFollowUp: boolean = body.isFollowUp === true;
     const history: ChatTurn[] = Array.isArray(body.history) ? body.history : [];
     const uploads: UploadedDoc[] = Array.isArray(body.uploads) ? body.uploads : [];
+    const forceRefresh: boolean = body.refresh === true;
 
-    const { xero, tenantId } = await getAuthenticatedXero();
-
-    const oneYearAgo = new Date();
-    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-    const dateFilter = `Date >= DateTime(${oneYearAgo.getFullYear()}, ${oneYearAgo.getMonth() + 1}, ${oneYearAgo.getDate()})`;
-    const now = new Date();
-    const fromDate = `${now.getFullYear() - 1}-04-01`;
-    const toDate = `${now.getFullYear()}-03-31`;
-    const today = now.toISOString().split("T")[0];
-
-    const [txRes, pnlRes, bsRes, contactsRes, orgRes] = await Promise.all([
-      xero.accountingApi.getBankTransactions(tenantId, undefined, dateFilter),
-      xero.accountingApi.getReportProfitAndLoss(tenantId, fromDate, toDate),
-      xero.accountingApi.getReportBalanceSheet(tenantId, today),
-      xero.accountingApi.getContacts(tenantId, undefined, "IsSupplier==true"),
-      xero.accountingApi.getOrganisations(tenantId),
-    ]);
-
-    const orgName = orgRes.body.organisations?.[0]?.name || "Your Organisation";
-
-    const transactions = (txRes.body.bankTransactions || []).map((tx) => ({
-      total: tx.total,
-      contact: tx.contact?.name,
-      type: tx.type?.toString(),
-      lineItems: (tx.lineItems || []).map((li) => ({
-        description: li.description,
-        amount: li.lineAmount,
-        accountCode: li.accountCode,
-      })),
-    }));
-
-    const contacts = (contactsRes.body.contacts || []).map((c) => ({
-      name: c.name,
-      isSupplier: c.isSupplier,
-    }));
-
-    const analysisResult = analyseDeductions(
-      orgName,
-      transactions,
-      pnlRes.body.reports?.[0] || null,
-      bsRes.body.reports?.[0] || null,
-      contacts
-    );
+    const { result: analysisResult, cached } = await getCachedAnalysis({ forceRefresh });
+    const orgName = analysisResult.orgName;
 
     const apiKey = getEnv("ANTHROPIC_API_KEY");
     if (!apiKey) {
@@ -167,6 +126,7 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
 
           try {
+            send({ type: "meta", cached });
             if (!isFollowUp) {
               send({ type: "analysis", data: analysisResult });
             }
