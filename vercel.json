@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "buildCommand": "next build",
+  "functions": {
+    "app/api/tax/explain/route.ts": {
+      "maxDuration": 60,
+      "includeFiles": "app/skills/**"
+    },
+    "app/api/tax/analyse/route.ts": {
+      "maxDuration": 30
+    },
+    "app/api/tax/upload/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}
