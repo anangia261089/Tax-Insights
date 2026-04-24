@@ -12,6 +12,8 @@ const nextConfig: NextConfig = {
     XERO_REDIRECT_URI: process.env.XERO_REDIRECT_URI || "",
     XERO_SCOPES: process.env.XERO_SCOPES || "",
     SESSION_SECRET: process.env.SESSION_SECRET || "",
+    DATABASE_URL: process.env.DATABASE_URL || "",
+    ENCRYPTION_MASTER_KEY: process.env.ENCRYPTION_MASTER_KEY || "",
   },
 };
 
