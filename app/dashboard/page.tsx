@@ -7,6 +7,12 @@ import AnalysisStream from "@/app/components/AnalysisStream";
 import SuggestedQuestions from "@/app/components/SuggestedQuestions";
 import type { TaxAnalysisResult } from "@/app/lib/types";
 
+interface UploadedDoc {
+  kind: "pdf" | "csv";
+  name: string;
+  data: string;
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
@@ -14,7 +20,12 @@ interface ChatMessage {
   streamedText?: string;
   isStreaming?: boolean;
   loading?: boolean;
+  attachments?: { name: string; kind: "pdf" | "csv" }[];
+  followUps?: string[];
 }
+
+const HISTORY_KEY = "jax.chat.history.v1";
+const MAX_HISTORY_TURNS = 20;
 
 function formatCurrency(n: number): string {
   return new Intl.NumberFormat("en-US", {
@@ -24,30 +35,23 @@ function formatCurrency(n: number): string {
   }).format(n);
 }
 
-function generateFollowUps(data: TaxAnalysisResult): string[] {
+function seedFollowUps(data: TaxAnalysisResult): string[] {
   const questions: string[] = [];
-
   if (data.itemsNeedingReview > 0) {
     questions.push("What documentation do I need for the flagged items?");
   }
-
   if (data.section179.potentialAdditional > 0) {
     questions.push(
       `Can I write off the ${formatCurrency(data.section179.assetValue)} in equipment this year?`
     );
   }
-
   const topCat = data.categories[0];
   if (topCat) {
-    questions.push(
-      `Break down my ${formatCurrency(topCat.total)} in business operating costs`
-    );
+    questions.push(`Break down my ${formatCurrency(topCat.total)} in ${topCat.title.toLowerCase()}`);
   }
-
   if (questions.length < 3) {
     questions.push("What should I prepare before meeting my tax advisor?");
   }
-
   return questions.slice(0, 3);
 }
 
@@ -58,6 +62,9 @@ export default function Dashboard() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isAnalysing, setIsAnalysing] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState<UploadedDoc[]>([]);
+  const [uploadError, setUploadError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -67,6 +74,38 @@ export default function Dashboard() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  // Load persisted history from localStorage
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as ChatMessage[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Strip transient flags
+          setMessages(
+            parsed.map((m) => ({ ...m, isStreaming: false, loading: false }))
+          );
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Persist history whenever it changes (skip transient streaming states)
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const anyStreaming = messages.some((m) => m.isStreaming || m.loading);
+    if (anyStreaming) return;
+    try {
+      // Keep only the last N turns to stay under localStorage quota
+      const trimmed = messages.slice(-MAX_HISTORY_TURNS * 2);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(trimmed));
+    } catch {
+      // ignore quota errors
+    }
+  }, [messages]);
 
   useEffect(() => {
     fetch("/api/xero/org")
@@ -78,45 +117,96 @@ export default function Dashboard() {
         if (!res.ok) throw new Error("Failed to connect");
         const data = await res.json();
         setOrgName(data.name);
-        setMessages([
-          {
-            role: "assistant",
-            content: `Hi! I'm connected to **${data.name}**. I can analyse your tax deductions, find missed opportunities, and explain everything in plain English.\n\nWhat would you like to know?`,
-          },
-        ]);
+        setMessages((prev) => {
+          if (prev.length > 0) return prev;
+          return [
+            {
+              role: "assistant",
+              content: `Hi! I'm connected to **${data.name}**. I can analyse your tax deductions, find missed opportunities, and explain everything in plain English. You can also upload receipts (PDF) or exports (CSV) and I'll factor them in.\n\nWhat would you like to know?`,
+            },
+          ];
+        });
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
 
-  // Track whether we've already shown the analysis cards
   const hasShownAnalysis = messages.some((m) => m.analysisData);
+
+  function clearHistory() {
+    if (!confirm("Clear the conversation? This cannot be undone.")) return;
+    localStorage.removeItem(HISTORY_KEY);
+    setMessages([
+      {
+        role: "assistant",
+        content: `Hi! I'm connected to **${orgName}**. What would you like to know?`,
+      },
+    ]);
+  }
+
+  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setUploadError("");
+
+    for (const file of Array.from(files)) {
+      const form = new FormData();
+      form.append("file", file);
+      try {
+        const res = await fetch("/api/tax/upload", { method: "POST", body: form });
+        const body = await res.json();
+        if (!res.ok) {
+          setUploadError(body.error || "Upload failed");
+          continue;
+        }
+        setPendingUploads((prev) => [...prev, body as UploadedDoc]);
+      } catch {
+        setUploadError("Upload failed");
+      }
+    }
+    // Reset input so same file can be re-selected
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removePendingUpload(name: string) {
+    setPendingUploads((prev) => prev.filter((d) => d.name !== name));
+  }
 
   async function runAnalysis(question: string) {
     if (isAnalysing) return;
     setIsAnalysing(true);
 
     const isFollowUp = hasShownAnalysis;
+    const uploadsForTurn = pendingUploads;
+    setPendingUploads([]);
 
-    // Add user message
-    setMessages((prev) => [...prev, { role: "user", content: question }]);
+    // Build history payload (text only, server side strips attachments)
+    const history = messages
+      .filter((m) => !m.loading && (m.content || m.streamedText))
+      .map((m) => ({
+        role: m.role,
+        content: m.role === "user" ? m.content : m.streamedText || m.content,
+      }));
 
-    // Add loading message
+    const userMsg: ChatMessage = {
+      role: "user",
+      content: question,
+      attachments: uploadsForTurn.map((u) => ({ name: u.name, kind: u.kind })),
+    };
+
+    setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "", loading: true }]);
     const loadingIdx = messages.length + 1;
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: "",
-        loading: true,
-      },
-    ]);
 
     try {
       const res = await fetch("/api/tax/explain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, isFollowUp }),
+        body: JSON.stringify({
+          question,
+          isFollowUp,
+          history,
+          uploads: uploadsForTurn,
+        }),
       });
 
       if (res.status === 401) {
@@ -131,13 +221,15 @@ export default function Dashboard() {
       const decoder = new TextDecoder();
       let analysisData: TaxAnalysisResult | undefined;
       let streamedText = "";
+      let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
@@ -146,7 +238,6 @@ export default function Dashboard() {
 
             if (data.type === "analysis") {
               analysisData = data.data;
-              // Switch from loading to streaming
               setMessages((prev) => {
                 const updated = [...prev];
                 updated[loadingIdx] = {
@@ -163,12 +254,20 @@ export default function Dashboard() {
               streamedText += data.text;
               setMessages((prev) => {
                 const updated = [...prev];
-                // Also switch from loading to streaming on first text chunk
                 updated[loadingIdx] = {
                   ...updated[loadingIdx],
                   loading: false,
                   streamedText,
                   isStreaming: true,
+                };
+                return updated;
+              });
+            } else if (data.type === "followUps") {
+              setMessages((prev) => {
+                const updated = [...prev];
+                updated[loadingIdx] = {
+                  ...updated[loadingIdx],
+                  followUps: Array.isArray(data.questions) ? data.questions : [],
                 };
                 return updated;
               });
@@ -184,7 +283,7 @@ export default function Dashboard() {
               });
             }
           } catch {
-            // Skip malformed JSON lines
+            // skip malformed
           }
         }
       }
@@ -193,7 +292,8 @@ export default function Dashboard() {
         const updated = [...prev];
         updated[loadingIdx] = {
           role: "assistant",
-          content: "Sorry, I had trouble analysing your data. Please try again or reconnect your Xero account.",
+          content:
+            "Sorry, I had trouble analysing your data. Please try again or reconnect your Xero account.",
           loading: false,
         };
         return updated;
@@ -205,9 +305,10 @@ export default function Dashboard() {
 
   function handleSend() {
     const q = inputValue.trim();
-    if (!q) return;
+    if (!q && pendingUploads.length === 0) return;
+    const question = q || `Please review the attached ${pendingUploads.map((u) => u.kind.toUpperCase()).join(" and ")}.`;
     setInputValue("");
-    runAnalysis(q);
+    runAnalysis(question);
   }
 
   const initialQuestions = [
@@ -240,17 +341,40 @@ export default function Dashboard() {
         <>
           <main className="flex-1 overflow-y-auto">
             <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+              {messages.length > 1 && (
+                <div className="flex justify-end">
+                  <button
+                    onClick={clearHistory}
+                    className="text-xs text-gray-400 hover:text-gray-600"
+                  >
+                    Clear conversation
+                  </button>
+                </div>
+              )}
+
               {messages.map((msg, i) => (
                 <div key={i}>
                   {msg.role === "user" ? (
-                    /* User message */
                     <div className="flex justify-end mb-2">
-                      <div className="bg-[#1B2A4A] text-white rounded-2xl rounded-br-md px-5 py-3 max-w-md text-sm font-medium shadow-sm">
-                        {msg.content}
+                      <div className="flex flex-col items-end gap-1">
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <div className="flex flex-wrap gap-1 justify-end">
+                            {msg.attachments.map((a) => (
+                              <span
+                                key={a.name}
+                                className="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded"
+                              >
+                                {a.kind === "pdf" ? "📄" : "📊"} {a.name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="bg-[#1B2A4A] text-white rounded-2xl rounded-br-md px-5 py-3 max-w-md text-sm font-medium shadow-sm">
+                          {msg.content}
+                        </div>
                       </div>
                     </div>
                   ) : (
-                    /* Assistant message */
                     <div className="flex gap-3 items-start">
                       <div className="w-9 h-9 bg-gradient-to-br from-[#00B7A3] to-[#0e9fd4] rounded-xl flex items-center justify-center shrink-0 mt-0.5 shadow-sm">
                         <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -260,7 +384,6 @@ export default function Dashboard() {
 
                       <div className="flex-1 min-w-0">
                         {msg.loading ? (
-                          /* Loading state */
                           <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-5 shadow-sm">
                             <div className="flex items-center gap-3">
                               <div className="flex gap-1">
@@ -274,9 +397,7 @@ export default function Dashboard() {
                             </div>
                           </div>
                         ) : msg.analysisData ? (
-                          /* Full analysis response */
                           <div className="space-y-4">
-                            {/* KPI Cards */}
                             <div className="grid grid-cols-2 gap-3">
                               <InsightCard
                                 label="Total Deductions"
@@ -308,7 +429,6 @@ export default function Dashboard() {
                               )}
                             </div>
 
-                            {/* Streamed explanation */}
                             <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-6 shadow-sm">
                               <AnalysisStream
                                 content={msg.streamedText || ""}
@@ -316,24 +436,30 @@ export default function Dashboard() {
                               />
                             </div>
 
-                            {/* Follow-up questions (only after streaming is done) */}
                             {!msg.isStreaming && msg.streamedText && (
                               <SuggestedQuestions
-                                questions={generateFollowUps(msg.analysisData)}
+                                questions={
+                                  msg.followUps && msg.followUps.length > 0
+                                    ? msg.followUps
+                                    : seedFollowUps(msg.analysisData)
+                                }
                                 onSelect={runAnalysis}
                               />
                             )}
                           </div>
                         ) : msg.streamedText !== undefined ? (
-                          /* Follow-up response (text only, no cards) */
-                          <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-6 shadow-sm">
-                            <AnalysisStream
-                              content={msg.streamedText || ""}
-                              isStreaming={msg.isStreaming || false}
-                            />
+                          <div className="space-y-3">
+                            <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-6 shadow-sm">
+                              <AnalysisStream
+                                content={msg.streamedText || ""}
+                                isStreaming={msg.isStreaming || false}
+                              />
+                            </div>
+                            {!msg.isStreaming && msg.followUps && msg.followUps.length > 0 && (
+                              <SuggestedQuestions questions={msg.followUps} onSelect={runAnalysis} />
+                            )}
                           </div>
                         ) : (
-                          /* Simple text message (welcome) */
                           <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-5 shadow-sm">
                             <AnalysisStream content={msg.content} isStreaming={false} />
                             {i === 0 && (
@@ -355,22 +481,69 @@ export default function Dashboard() {
             </div>
           </main>
 
-          {/* Input bar */}
           <div className="border-t border-gray-200 bg-white/80 backdrop-blur-sm px-4 py-4">
             <div className="max-w-2xl mx-auto">
-              <div className="flex gap-2">
+              {pendingUploads.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {pendingUploads.map((u) => (
+                    <span
+                      key={u.name}
+                      className="inline-flex items-center gap-1.5 text-xs bg-gray-100 border border-gray-200 text-gray-700 pl-2 pr-1 py-1 rounded-lg"
+                    >
+                      <span>{u.kind === "pdf" ? "📄" : "📊"}</span>
+                      <span className="max-w-[200px] truncate">{u.name}</span>
+                      <button
+                        onClick={() => removePendingUpload(u.name)}
+                        className="w-4 h-4 rounded hover:bg-gray-200 text-gray-500 flex items-center justify-center"
+                        aria-label={`Remove ${u.name}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {uploadError && (
+                <p className="text-xs text-red-600 mb-2">{uploadError}</p>
+              )}
+
+              <div className="flex gap-2 items-center">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.csv,application/pdf,text/csv"
+                  multiple
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isAnalysing}
+                  className="p-3 text-gray-500 hover:text-[#00B7A3] hover:bg-gray-50 rounded-xl disabled:opacity-40 transition-colors"
+                  aria-label="Attach PDF or CSV"
+                  title="Attach PDF or CSV"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 10-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                  </svg>
+                </button>
                 <input
                   type="text"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder="Ask about your tax deductions..."
+                  placeholder={
+                    pendingUploads.length > 0
+                      ? "Add a note, or press send to analyse the attachment..."
+                      : "Ask about your tax deductions..."
+                  }
                   disabled={isAnalysing}
                   className="flex-1 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#00B7A3]/30 focus:border-[#00B7A3] disabled:opacity-50 transition-all"
                 />
                 <button
                   onClick={handleSend}
-                  disabled={isAnalysing || !inputValue.trim()}
+                  disabled={isAnalysing || (!inputValue.trim() && pendingUploads.length === 0)}
                   className="px-5 py-3 bg-[#1B2A4A] text-white rounded-xl text-sm font-medium hover:bg-[#253a5e] disabled:opacity-40 transition-all"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

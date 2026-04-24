@@ -57,14 +57,14 @@ function TaxPositionTable({ data }: { data: TaxAnalysisResult }) {
         <tbody className="divide-y divide-gray-50">
           {data.categories.map((cat, i) => (
             <tr key={i} className="hover:bg-gray-50 transition-colors">
-              <td className="px-5 py-3.5 font-medium text-gray-900">{cat.name}</td>
-              <td className="px-5 py-3.5 text-gray-500 font-mono text-xs">{cat.irsReference}</td>
+              <td className="px-5 py-3.5 font-medium text-gray-900">{cat.title}</td>
+              <td className="px-5 py-3.5 text-gray-500 font-mono text-xs">{cat.section}</td>
               <td className="px-5 py-3.5 text-right font-semibold text-gray-900">
                 {formatCurrency(cat.total)}
               </td>
-              <td className="px-5 py-3.5 text-right text-gray-500">{cat.count}</td>
+              <td className="px-5 py-3.5 text-right text-gray-500">{cat.items.length}</td>
               <td className="px-5 py-3.5 text-center">
-                <RiskBadge level={cat.flagged > 0 ? "medium" : "low"} />
+                <RiskBadge level={cat.items.some((i) => i.status === "review") ? "medium" : "low"} />
               </td>
             </tr>
           ))}
