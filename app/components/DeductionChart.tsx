@@ -21,8 +21,8 @@ export default function DeductionChart({ categories }: Props) {
       <div className="space-y-3">
         {categories.map((cat, i) => (
           <div key={cat.section} className="flex items-center gap-3">
-            <div className="w-24 text-xs text-gray-600 shrink-0 truncate" title={cat.title}>
-              {cat.section}
+            <div className="w-36 text-xs text-gray-600 shrink-0 truncate" title={cat.title}>
+              {cat.title}
             </div>
             <div className="flex-1 bg-gray-100 rounded-full h-6 relative overflow-hidden">
               <div
@@ -33,7 +33,7 @@ export default function DeductionChart({ categories }: Props) {
                 }}
               />
             </div>
-            <div className="w-24 text-xs text-gray-700 text-right shrink-0">
+            <div className="w-20 text-xs text-gray-700 text-right shrink-0">
               {formatCurrency(cat.total)}
             </div>
           </div>

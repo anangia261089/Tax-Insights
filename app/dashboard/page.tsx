@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef } from "react";
 import Nav from "@/app/components/Nav";
 import InsightCard from "@/app/components/InsightCard";
+import DeductionChart from "@/app/components/DeductionChart";
 import AnalysisStream from "@/app/components/AnalysisStream";
 import SuggestedQuestions from "@/app/components/SuggestedQuestions";
 import type { TaxAnalysisResult } from "@/app/lib/types";
@@ -94,13 +95,11 @@ export default function Dashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = useCallback(() => {
+  // Only scroll to bottom when the user sends a message — never during streaming.
+  // The container uses overflow-anchor so the browser keeps position stable as content grows.
+  function scrollToBottom() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
+  }
 
   // Load conversation from server on mount
   useEffect(() => {
@@ -190,6 +189,8 @@ export default function Dashboard() {
     };
 
     setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "", loading: true }]);
+    // Scroll once when the user sends — never again until next user message
+    setTimeout(scrollToBottom, 50);
     const loadingIdx = messages.length + 1;
 
     try {
@@ -312,7 +313,7 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#FAFBFC]">
+    <div className="h-screen flex flex-col overflow-hidden bg-[#FAFBFC]">
       <Nav orgName={orgName} />
 
       {loading ? (
@@ -333,7 +334,7 @@ export default function Dashboard() {
         </main>
       ) : (
         <>
-          <main className="flex-1 overflow-y-auto">
+          <main className="flex-1 overflow-y-auto" style={{ overflowAnchor: "none" }}>
             <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
               {messages.length > 1 && (
                 <div className="flex justify-end gap-4">
@@ -434,6 +435,10 @@ export default function Dashboard() {
                               )}
                             </div>
 
+                            {msg.analysisData.categories.length > 0 && (
+                              <DeductionChart categories={msg.analysisData.categories} />
+                            )}
+
                             <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-6 shadow-sm">
                               <AnalysisStream
                                 content={msg.streamedText || ""}
@@ -482,7 +487,7 @@ export default function Dashboard() {
                   )}
                 </div>
               ))}
-              <div ref={chatEndRef} />
+              <div ref={chatEndRef} style={{ overflowAnchor: "auto", height: "1px" }} />
             </div>
           </main>
 
