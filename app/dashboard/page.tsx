@@ -123,14 +123,14 @@ export default function Dashboard() {
 
   function enterChat(initialQuestion?: string) {
     setMode("chat");
-    if (initialQuestion) {
+    // Always start immediately — no greeting, no waiting.
+    // If coming from a specific item, ask about that item.
+    // If coming from "Review all", walk through the top opportunities right away.
+    const question = initialQuestion || "Walk me through my top deduction opportunities.";
+    if (messages.length === 0) {
+      setTimeout(() => runAnalysis(question), 100);
+    } else if (initialQuestion) {
       setTimeout(() => runAnalysis(initialQuestion), 100);
-    } else if (messages.length === 0) {
-      // First time in chat — seed a welcome message
-      setMessages([{
-        role: "assistant",
-        content: `Hi! I'm connected to **${orgName}**. I can walk through your deductions, explain any category in plain English, or answer specific questions. What would you like to explore?`,
-      }]);
     }
   }
 
@@ -366,7 +366,7 @@ export default function Dashboard() {
                                 <div className="w-2 h-2 bg-[#00B7A3] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
                                 <div className="w-2 h-2 bg-[#00B7A3] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
                               </div>
-                              <p className="text-sm text-gray-500">Pulling your data from Xero...</p>
+                              <p className="text-sm text-gray-500">Reading your Xero data...</p>
                             </div>
                           </div>
                         ) : msg.analysisData ? (
@@ -444,7 +444,7 @@ export default function Dashboard() {
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder={pendingUploads.length > 0 ? "Add a note, or press send..." : "Ask about your tax deductions..."}
+                  placeholder={pendingUploads.length > 0 ? "Add a note, or press send..." : "Ask JAX anything about your deductions..."}
                   disabled={isAnalysing}
                   className="flex-1 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#00B7A3]/30 focus:border-[#00B7A3] disabled:opacity-50 transition-all"
                 />
