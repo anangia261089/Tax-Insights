@@ -24,6 +24,7 @@ export interface TaxCategory {
   title: string;
   items: DeductionItem[];
   total: number;
+  confidence: "high" | "medium" | "low";
 }
 
 export interface Section179Analysis {

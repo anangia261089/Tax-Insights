@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useRef } from "react";
 import Nav from "@/app/components/Nav";
-import InsightCard from "@/app/components/InsightCard";
-import DeductionChart from "@/app/components/DeductionChart";
+import TaxIntelligencePanel from "@/app/components/TaxIntelligencePanel";
 import AnalysisStream from "@/app/components/AnalysisStream";
 import SuggestedQuestions from "@/app/components/SuggestedQuestions";
+import InsightCard from "@/app/components/InsightCard";
+import DeductionChart from "@/app/components/DeductionChart";
 import type { TaxAnalysisResult } from "@/app/lib/types";
 
 interface UploadedDoc {
@@ -47,11 +48,7 @@ function formatCurrency(n: number): string {
 
 function serverToChat(m: ServerMessage): ChatMessage {
   if (m.role === "user") {
-    return {
-      role: "user",
-      content: m.content,
-      attachments: m.metadata?.attachments,
-    };
+    return { role: "user", content: m.content, attachments: m.metadata?.attachments };
   }
   return {
     role: "assistant",
@@ -65,28 +62,22 @@ function serverToChat(m: ServerMessage): ChatMessage {
 
 function seedFollowUps(data: TaxAnalysisResult): string[] {
   const questions: string[] = [];
-  if (data.itemsNeedingReview > 0) {
-    questions.push("What documentation do I need for the flagged items?");
-  }
-  if (data.section179.potentialAdditional > 0) {
-    questions.push(
-      `Can I write off the ${formatCurrency(data.section179.assetValue)} in equipment this year?`
-    );
-  }
+  if (data.itemsNeedingReview > 0) questions.push("What documentation do I need for the flagged items?");
+  if (data.section179.potentialAdditional > 0) questions.push(`Can I write off the ${formatCurrency(data.section179.assetValue)} in equipment this year?`);
   const topCat = data.categories[0];
-  if (topCat) {
-    questions.push(`Break down my ${formatCurrency(topCat.total)} in ${topCat.title.toLowerCase()}`);
-  }
-  if (questions.length < 3) {
-    questions.push("What should I prepare before meeting my tax advisor?");
-  }
+  if (topCat) questions.push(`Break down my ${formatCurrency(topCat.total)} in ${topCat.title.toLowerCase()}`);
+  if (questions.length < 3) questions.push("What should I prepare before meeting my tax advisor?");
   return questions.slice(0, 3);
 }
 
+type Mode = "home" | "chat";
+
 export default function Dashboard() {
+  const [mode, setMode] = useState<Mode>("home");
   const [orgName, setOrgName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [homeAnalysis, setHomeAnalysis] = useState<TaxAnalysisResult | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isAnalysing, setIsAnalysing] = useState(false);
@@ -95,54 +86,63 @@ export default function Dashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Only scroll to bottom when the user sends a message — never during streaming.
-  // The container uses overflow-anchor so the browser keeps position stable as content grows.
   function scrollToBottom() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }
 
-  // Load conversation from server on mount
+  // Load home analysis + chat history on mount
   useEffect(() => {
-    fetch("/api/chat/history")
-      .then(async (res) => {
-        if (res.status === 401) {
-          window.location.href = "/api/auth/login";
-          return;
+    async function init() {
+      try {
+        // Load Xero analysis for home panel
+        const analysisRes = await fetch("/api/tax/analyse");
+        if (analysisRes.status === 401) { window.location.href = "/api/auth/login"; return; }
+        if (analysisRes.ok) {
+          const data: TaxAnalysisResult = await analysisRes.json();
+          setHomeAnalysis(data);
+          setOrgName(data.orgName);
         }
-        if (!res.ok) throw new Error("Failed to load history");
-        const data: { orgName: string | null; messages: ServerMessage[] } = await res.json();
-        setOrgName(data.orgName || "your organisation");
 
-        if (data.messages.length === 0) {
-          setMessages([
-            {
-              role: "assistant",
-              content: `Hi! I'm connected to **${data.orgName || "your business"}**. I can analyse your tax deductions, find missed opportunities, and explain everything in plain English. You can also upload receipts (PDF) or exports (CSV) and I'll factor them in.\n\nWhat would you like to know?`,
-            },
-          ]);
-        } else {
-          setMessages(data.messages.map(serverToChat));
+        // Load chat history
+        const historyRes = await fetch("/api/chat/history");
+        if (historyRes.ok) {
+          const data: { orgName: string | null; messages: ServerMessage[] } = await historyRes.json();
+          if (data.orgName) setOrgName(data.orgName);
+          if (data.messages.length > 0) {
+            setMessages(data.messages.map(serverToChat));
+          }
         }
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load");
+      } finally {
+        setLoading(false);
+      }
+    }
+    init();
   }, []);
+
+  function enterChat(initialQuestion?: string) {
+    setMode("chat");
+    if (initialQuestion) {
+      setTimeout(() => runAnalysis(initialQuestion), 100);
+    } else if (messages.length === 0) {
+      // First time in chat — seed a welcome message
+      setMessages([{
+        role: "assistant",
+        content: `Hi! I'm connected to **${orgName}**. I can walk through your deductions, explain any category in plain English, or answer specific questions. What would you like to explore?`,
+      }]);
+    }
+  }
 
   const hasShownAnalysis = messages.some((m) => m.analysisData);
 
   async function clearHistory() {
-    if (!confirm("Clear the conversation? This deletes all prior messages for this organisation.")) {
-      return;
-    }
+    if (!confirm("Clear the conversation? This deletes all prior messages.")) return;
     try {
       const res = await fetch("/api/chat/history", { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to clear");
-      setMessages([
-        {
-          role: "assistant",
-          content: `Hi! I'm connected to **${orgName}**. What would you like to know?`,
-        },
-      ]);
+      setMessages([]);
+      setMode("home");
     } catch {
       setError("Failed to clear conversation. Please try again.");
     }
@@ -152,21 +152,15 @@ export default function Dashboard() {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     setUploadError("");
-
     for (const file of Array.from(files)) {
       const form = new FormData();
       form.append("file", file);
       try {
         const res = await fetch("/api/tax/upload", { method: "POST", body: form });
         const body = await res.json();
-        if (!res.ok) {
-          setUploadError(body.error || "Upload failed");
-          continue;
-        }
+        if (!res.ok) { setUploadError(body.error || "Upload failed"); continue; }
         setPendingUploads((prev) => [...prev, body as UploadedDoc]);
-      } catch {
-        setUploadError("Upload failed");
-      }
+      } catch { setUploadError("Upload failed"); }
     }
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
@@ -189,7 +183,6 @@ export default function Dashboard() {
     };
 
     setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "", loading: true }]);
-    // Scroll once when the user sends — never again until next user message
     setTimeout(scrollToBottom, 50);
     const loadingIdx = messages.length + 1;
 
@@ -197,17 +190,9 @@ export default function Dashboard() {
       const res = await fetch("/api/tax/explain", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          question,
-          uploads: uploadsForTurn,
-          refresh: opts.refresh === true,
-        }),
+        body: JSON.stringify({ question, uploads: uploadsForTurn, refresh: opts.refresh === true }),
       });
-
-      if (res.status === 401) {
-        window.location.href = "/api/auth/login";
-        return;
-      }
+      if (res.status === 401) { window.location.href = "/api/auth/login"; return; }
       if (!res.ok) throw new Error("Analysis failed");
 
       const reader = res.body?.getReader();
@@ -221,7 +206,6 @@ export default function Dashboard() {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
@@ -230,67 +214,40 @@ export default function Dashboard() {
           if (!line.startsWith("data: ")) continue;
           try {
             const data = JSON.parse(line.slice(6));
-
             if (data.type === "analysis") {
               analysisData = data.data;
               setMessages((prev) => {
                 const updated = [...prev];
-                updated[loadingIdx] = {
-                  role: "assistant",
-                  content: "",
-                  analysisData,
-                  streamedText: "",
-                  isStreaming: true,
-                  loading: false,
-                };
+                updated[loadingIdx] = { role: "assistant", content: "", analysisData, streamedText: "", isStreaming: true, loading: false };
                 return updated;
               });
             } else if (data.type === "text") {
               streamedText += data.text;
               setMessages((prev) => {
                 const updated = [...prev];
-                updated[loadingIdx] = {
-                  ...updated[loadingIdx],
-                  loading: false,
-                  streamedText,
-                  isStreaming: true,
-                };
+                updated[loadingIdx] = { ...updated[loadingIdx], loading: false, streamedText, isStreaming: true };
                 return updated;
               });
             } else if (data.type === "followUps") {
               setMessages((prev) => {
                 const updated = [...prev];
-                updated[loadingIdx] = {
-                  ...updated[loadingIdx],
-                  followUps: Array.isArray(data.questions) ? data.questions : [],
-                };
+                updated[loadingIdx] = { ...updated[loadingIdx], followUps: Array.isArray(data.questions) ? data.questions : [] };
                 return updated;
               });
             } else if (data.type === "done") {
               setMessages((prev) => {
                 const updated = [...prev];
-                updated[loadingIdx] = {
-                  ...updated[loadingIdx],
-                  streamedText,
-                  isStreaming: false,
-                };
+                updated[loadingIdx] = { ...updated[loadingIdx], streamedText, isStreaming: false };
                 return updated;
               });
             }
-          } catch {
-            // skip malformed
-          }
+          } catch { /* skip malformed */ }
         }
       }
     } catch {
       setMessages((prev) => {
         const updated = [...prev];
-        updated[loadingIdx] = {
-          role: "assistant",
-          content:
-            "Sorry, I had trouble analysing your data. Please try again or reconnect your Xero account.",
-          loading: false,
-        };
+        updated[loadingIdx] = { role: "assistant", content: "Sorry, I had trouble analysing your data. Please try again.", loading: false };
         return updated;
       });
     } finally {
@@ -306,12 +263,6 @@ export default function Dashboard() {
     runAnalysis(question);
   }
 
-  const initialQuestions = [
-    "Analyse my tax deductions",
-    "Find missed deduction opportunities",
-    "What can I write off this year?",
-  ];
-
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-[#FAFBFC]">
       <Nav orgName={orgName} />
@@ -320,44 +271,66 @@ export default function Dashboard() {
         <main className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <div className="w-10 h-10 border-2 border-[#00B7A3] border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-sm text-gray-500">Loading your conversation...</p>
+            <p className="text-sm text-gray-500">Connecting to Xero...</p>
           </div>
         </main>
       ) : error ? (
         <main className="flex-1 flex items-center justify-center">
           <div className="text-center max-w-sm">
             <p className="text-red-600 mb-4">{error}</p>
-            <a href="/api/auth/login" className="text-[#00B7A3] hover:underline text-sm">
-              Reconnect
-            </a>
+            <a href="/api/auth/login" className="text-[#00B7A3] hover:underline text-sm">Reconnect</a>
           </div>
         </main>
+      ) : mode === "home" ? (
+        /* ── HOME MODE ── */
+        <main className="flex-1 overflow-y-auto">
+          {homeAnalysis ? (
+            <TaxIntelligencePanel
+              analysis={homeAnalysis}
+              onReviewWithJax={() => enterChat()}
+              onAskJax={(ctx) => enterChat(ctx)}
+            />
+          ) : (
+            <div className="flex-1 flex items-center justify-center">
+              <p className="text-sm text-gray-500">Could not load Xero data. <a href="/api/auth/login" className="text-[#00B7A3] hover:underline">Reconnect</a></p>
+            </div>
+          )}
+        </main>
       ) : (
+        /* ── CHAT MODE ── */
         <>
           <main className="flex-1 overflow-y-auto" style={{ overflowAnchor: "none" }}>
-            <div className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-              {messages.length > 1 && (
-                <div className="flex justify-end gap-4">
+            <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+              {/* Top bar */}
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setMode("home")}
+                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Overview
+                </button>
+                <div className="flex gap-4">
                   {hasShownAnalysis && (
                     <button
-                      onClick={() =>
-                        runAnalysis("Re-analyse with the latest Xero data", { refresh: true })
-                      }
+                      onClick={() => runAnalysis("Re-analyse with the latest Xero data", { refresh: true })}
                       disabled={isAnalysing}
                       className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-40"
                     >
-                      Refresh Xero data
+                      Refresh data
                     </button>
                   )}
-                  <button
-                    onClick={clearHistory}
-                    className="text-xs text-gray-400 hover:text-gray-600"
-                  >
-                    Clear conversation
-                  </button>
+                  {messages.length > 1 && (
+                    <button onClick={clearHistory} className="text-xs text-gray-400 hover:text-gray-600">
+                      Clear
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
 
+              {/* Messages */}
               {messages.map((msg, i) => (
                 <div key={i}>
                   {msg.role === "user" ? (
@@ -366,10 +339,7 @@ export default function Dashboard() {
                         {msg.attachments && msg.attachments.length > 0 && (
                           <div className="flex flex-wrap gap-1 justify-end">
                             {msg.attachments.map((a) => (
-                              <span
-                                key={a.name}
-                                className="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded"
-                              >
+                              <span key={a.name} className="text-[11px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
                                 {a.kind === "pdf" ? "📄" : "📊"} {a.name}
                               </span>
                             ))}
@@ -387,7 +357,6 @@ export default function Dashboard() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                         </svg>
                       </div>
-
                       <div className="flex-1 min-w-0">
                         {msg.loading ? (
                           <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-5 shadow-sm">
@@ -397,62 +366,30 @@ export default function Dashboard() {
                                 <div className="w-2 h-2 bg-[#00B7A3] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
                                 <div className="w-2 h-2 bg-[#00B7A3] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
                               </div>
-                              <p className="text-sm text-gray-500">
-                                Pulling your data from Xero and analysing...
-                              </p>
+                              <p className="text-sm text-gray-500">Pulling your data from Xero...</p>
                             </div>
                           </div>
                         ) : msg.analysisData ? (
                           <div className="space-y-4">
                             <div className="grid grid-cols-2 gap-3">
-                              <InsightCard
-                                label="Total Deductions"
-                                value={formatCurrency(msg.analysisData.totalDeductions)}
-                                subtitle={`${msg.analysisData.fiscalYear} fiscal year`}
-                                accent="teal"
-                              />
-                              <InsightCard
-                                label="Potential Tax Savings"
-                                value={formatCurrency(msg.analysisData.estimatedTaxSavings)}
-                                subtitle="At 23.2% effective rate"
-                                accent="green"
-                              />
+                              <InsightCard label="Total Deductions" value={formatCurrency(msg.analysisData.totalDeductions)} subtitle={`${msg.analysisData.fiscalYear} fiscal year`} accent="teal" />
+                              <InsightCard label="Potential Tax Savings" value={formatCurrency(msg.analysisData.estimatedTaxSavings)} subtitle="At 23.2% effective rate" accent="green" />
                               {msg.analysisData.itemsNeedingReview > 0 && (
-                                <InsightCard
-                                  label="Needs Your Attention"
-                                  value={`${msg.analysisData.itemsNeedingReview} item${msg.analysisData.itemsNeedingReview > 1 ? "s" : ""}`}
-                                  subtitle="May need documentation"
-                                  accent="amber"
-                                />
+                                <InsightCard label="Needs Your Attention" value={`${msg.analysisData.itemsNeedingReview} item${msg.analysisData.itemsNeedingReview > 1 ? "s" : ""}`} subtitle="May need documentation" accent="amber" />
                               )}
                               {msg.analysisData.section179.potentialAdditional > 0 && (
-                                <InsightCard
-                                  label="Unclaimed Write-off"
-                                  value={formatCurrency(msg.analysisData.section179.potentialAdditional)}
-                                  subtitle="Equipment you could deduct now"
-                                  accent="blue"
-                                />
+                                <InsightCard label="Unclaimed Write-off" value={formatCurrency(msg.analysisData.section179.potentialAdditional)} subtitle="Equipment you could deduct now" accent="blue" />
                               )}
                             </div>
-
                             {msg.analysisData.categories.length > 0 && (
                               <DeductionChart categories={msg.analysisData.categories} />
                             )}
-
                             <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-6 shadow-sm">
-                              <AnalysisStream
-                                content={msg.streamedText || ""}
-                                isStreaming={msg.isStreaming || false}
-                              />
+                              <AnalysisStream content={msg.streamedText || ""} isStreaming={msg.isStreaming || false} />
                             </div>
-
                             {!msg.isStreaming && msg.streamedText && (
                               <SuggestedQuestions
-                                questions={
-                                  msg.followUps && msg.followUps.length > 0
-                                    ? msg.followUps
-                                    : seedFollowUps(msg.analysisData)
-                                }
+                                questions={msg.followUps && msg.followUps.length > 0 ? msg.followUps : seedFollowUps(msg.analysisData)}
                                 onSelect={runAnalysis}
                               />
                             )}
@@ -460,10 +397,7 @@ export default function Dashboard() {
                         ) : msg.streamedText !== undefined ? (
                           <div className="space-y-3">
                             <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-6 shadow-sm">
-                              <AnalysisStream
-                                content={msg.streamedText || ""}
-                                isStreaming={msg.isStreaming || false}
-                              />
+                              <AnalysisStream content={msg.streamedText || ""} isStreaming={msg.isStreaming || false} />
                             </div>
                             {!msg.isStreaming && msg.followUps && msg.followUps.length > 0 && (
                               <SuggestedQuestions questions={msg.followUps} onSelect={runAnalysis} />
@@ -472,14 +406,6 @@ export default function Dashboard() {
                         ) : (
                           <div className="bg-white rounded-2xl rounded-tl-md border border-gray-100 p-5 shadow-sm">
                             <AnalysisStream content={msg.content} isStreaming={false} />
-                            {i === 0 && (
-                              <div className="mt-4">
-                                <SuggestedQuestions
-                                  questions={initialQuestions}
-                                  onSelect={runAnalysis}
-                                />
-                              </div>
-                            )}
                           </div>
                         )}
                       </div>
@@ -491,49 +417,24 @@ export default function Dashboard() {
             </div>
           </main>
 
+          {/* Input bar */}
           <div className="border-t border-gray-200 bg-white/80 backdrop-blur-sm px-4 py-4">
             <div className="max-w-2xl mx-auto">
               {pendingUploads.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-2">
                   {pendingUploads.map((u) => (
-                    <span
-                      key={u.name}
-                      className="inline-flex items-center gap-1.5 text-xs bg-gray-100 border border-gray-200 text-gray-700 pl-2 pr-1 py-1 rounded-lg"
-                    >
+                    <span key={u.name} className="inline-flex items-center gap-1.5 text-xs bg-gray-100 border border-gray-200 text-gray-700 pl-2 pr-1 py-1 rounded-lg">
                       <span>{u.kind === "pdf" ? "📄" : "📊"}</span>
                       <span className="max-w-[200px] truncate">{u.name}</span>
-                      <button
-                        onClick={() => removePendingUpload(u.name)}
-                        className="w-4 h-4 rounded hover:bg-gray-200 text-gray-500 flex items-center justify-center"
-                        aria-label={`Remove ${u.name}`}
-                      >
-                        ×
-                      </button>
+                      <button onClick={() => removePendingUpload(u.name)} className="w-4 h-4 rounded hover:bg-gray-200 text-gray-500 flex items-center justify-center">×</button>
                     </span>
                   ))}
                 </div>
               )}
-
-              {uploadError && (
-                <p className="text-xs text-red-600 mb-2">{uploadError}</p>
-              )}
-
+              {uploadError && <p className="text-xs text-red-600 mb-2">{uploadError}</p>}
               <div className="flex gap-2 items-center">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.csv,application/pdf,text/csv"
-                  multiple
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isAnalysing}
-                  className="p-3 text-gray-500 hover:text-[#00B7A3] hover:bg-gray-50 rounded-xl disabled:opacity-40 transition-colors"
-                  aria-label="Attach PDF or CSV"
-                  title="Attach PDF or CSV"
-                >
+                <input ref={fileInputRef} type="file" accept=".pdf,.csv,application/pdf,text/csv" multiple onChange={handleFileSelect} className="hidden" />
+                <button onClick={() => fileInputRef.current?.click()} disabled={isAnalysing} className="p-3 text-gray-500 hover:text-[#00B7A3] hover:bg-gray-50 rounded-xl disabled:opacity-40 transition-colors" title="Attach PDF or CSV">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 10-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                   </svg>
@@ -543,19 +444,11 @@ export default function Dashboard() {
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSend()}
-                  placeholder={
-                    pendingUploads.length > 0
-                      ? "Add a note, or press send to analyse the attachment..."
-                      : "Ask about your tax deductions..."
-                  }
+                  placeholder={pendingUploads.length > 0 ? "Add a note, or press send..." : "Ask about your tax deductions..."}
                   disabled={isAnalysing}
                   className="flex-1 px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#00B7A3]/30 focus:border-[#00B7A3] disabled:opacity-50 transition-all"
                 />
-                <button
-                  onClick={handleSend}
-                  disabled={isAnalysing || (!inputValue.trim() && pendingUploads.length === 0)}
-                  className="px-5 py-3 bg-[#1B2A4A] text-white rounded-xl text-sm font-medium hover:bg-[#253a5e] disabled:opacity-40 transition-all"
-                >
+                <button onClick={handleSend} disabled={isAnalysing || (!inputValue.trim() && pendingUploads.length === 0)} className="px-5 py-3 bg-[#1B2A4A] text-white rounded-xl text-sm font-medium hover:bg-[#253a5e] disabled:opacity-40 transition-all">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19V5m0 0l-7 7m7-7l7 7" />
                   </svg>

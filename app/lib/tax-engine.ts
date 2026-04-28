@@ -171,11 +171,24 @@ export function analyseDeductions(
         title: item.irsSectionTitle,
         items: [],
         total: 0,
+        confidence: "high",
       });
     }
     const cat = categoryMap.get(key)!;
     cat.items.push(item);
     cat.total += item.amount;
+  }
+
+  // Score confidence per category
+  for (const cat of categoryMap.values()) {
+    const hasReviewItems = cat.items.some((i) => i.status === "review");
+    if (cat.section === "§274") {
+      cat.confidence = "medium"; // vehicle always needs mileage log
+    } else if (hasReviewItems) {
+      cat.confidence = "medium"; // flagged items need documentation
+    } else {
+      cat.confidence = "high"; // clean, well-documented expenses
+    }
   }
 
   const categories = Array.from(categoryMap.values()).sort((a, b) => b.total - a.total);
