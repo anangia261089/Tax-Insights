@@ -1,5 +1,6 @@
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { analyseDeductions } from "@/app/lib/tax-engine";
+import { withRetry } from "@/app/lib/retry";
 import type { TaxAnalysisResult } from "@/app/lib/types";
 import type { XeroClient } from "xero-node";
 
@@ -17,20 +18,19 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 
 async function fetchAndAnalyse(xero: XeroClient, tenantId: string): Promise<TaxAnalysisResult> {
-  const oneYearAgo = new Date();
-  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-  const dateFilter = `Date >= DateTime(${oneYearAgo.getFullYear()}, ${oneYearAgo.getMonth() + 1}, ${oneYearAgo.getDate()})`;
-  const now = new Date();
-  const fromDate = `${now.getFullYear() - 1}-04-01`;
-  const toDate = `${now.getFullYear()}-03-31`;
-  const today = now.toISOString().split("T")[0];
+  // US calendar tax year: prior year Jan 1 – Dec 31
+  const taxYear = new Date().getFullYear() - 1;
+  const fromDate = `${taxYear}-01-01`;
+  const toDate = `${taxYear}-12-31`;
+  const dateFilter = `Date >= DateTime(${taxYear}, 1, 1) AND Date <= DateTime(${taxYear}, 12, 31)`;
+  const today = new Date().toISOString().split("T")[0];
 
   const [txRes, pnlRes, bsRes, contactsRes, orgRes] = await Promise.all([
-    xero.accountingApi.getBankTransactions(tenantId, undefined, dateFilter),
-    xero.accountingApi.getReportProfitAndLoss(tenantId, fromDate, toDate),
-    xero.accountingApi.getReportBalanceSheet(tenantId, today),
-    xero.accountingApi.getContacts(tenantId, undefined, "IsSupplier==true"),
-    xero.accountingApi.getOrganisations(tenantId),
+    withRetry(() => xero.accountingApi.getBankTransactions(tenantId, undefined, dateFilter)),
+    withRetry(() => xero.accountingApi.getReportProfitAndLoss(tenantId, fromDate, toDate)),
+    withRetry(() => xero.accountingApi.getReportBalanceSheet(tenantId, today)),
+    withRetry(() => xero.accountingApi.getContacts(tenantId, undefined, "IsSupplier==true")),
+    withRetry(() => xero.accountingApi.getOrganisations(tenantId)),
   ]);
 
   const orgName = orgRes.body.organisations?.[0]?.name || "Your Organisation";

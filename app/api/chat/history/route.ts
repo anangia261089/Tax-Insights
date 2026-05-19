@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { resolveTenant } from "@/app/lib/tenant";
 import {
@@ -6,6 +6,7 @@ import {
   getOrCreateActiveConversation,
   loadMessages,
 } from "@/app/lib/chat-store";
+import { isSameOrigin, csrfError } from "@/app/lib/csrf";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -34,7 +35,8 @@ export async function GET() {
   }
 }
 
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
+  if (!isSameOrigin(request)) return csrfError();
   try {
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();
     const tenant = await resolveTenant(xeroTenantId);

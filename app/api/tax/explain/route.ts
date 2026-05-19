@@ -6,6 +6,7 @@ import { getCachedAnalysis } from "@/app/lib/xero-cache";
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { resolveTenant } from "@/app/lib/tenant";
 import { checkRateLimit } from "@/app/lib/rate-limit";
+import { isSameOrigin, csrfError } from "@/app/lib/csrf";
 import {
   appendMessage,
   getOrCreateActiveConversation,
@@ -74,6 +75,7 @@ function buildUploadContext(docs: UploadedDoc[]): ContentBlock[] {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isSameOrigin(request)) return csrfError();
   try {
     const body = await request.json().catch(() => ({}));
     const userQuestion: string = body.question || "Analyse my tax deductions";

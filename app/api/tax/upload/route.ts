@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isSameOrigin, csrfError } from "@/app/lib/csrf";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -8,6 +9,7 @@ const MAX_CSV_BYTES = 2 * 1024 * 1024; // 2 MB
 const MAX_CSV_CHARS = 120_000; // ~30k tokens, leaves room for conversation
 
 export async function POST(request: NextRequest) {
+  if (!isSameOrigin(request)) return csrfError();
   try {
     const form = await request.formData();
     const file = form.get("file");

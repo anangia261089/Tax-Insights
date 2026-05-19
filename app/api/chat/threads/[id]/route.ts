@@ -6,6 +6,7 @@ import {
   updateConversation,
   deleteConversationById,
 } from "@/app/lib/chat-store";
+import { isSameOrigin, csrfError } from "@/app/lib/csrf";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -31,6 +32,7 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!isSameOrigin(request)) return csrfError();
   try {
     const { id } = await params;
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();
@@ -49,9 +51,10 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!isSameOrigin(request)) return csrfError();
   try {
     const { id } = await params;
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();

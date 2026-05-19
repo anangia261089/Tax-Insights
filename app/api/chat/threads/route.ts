@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { resolveTenant } from "@/app/lib/tenant";
 import { listConversations, createConversation } from "@/app/lib/chat-store";
+import { isSameOrigin, csrfError } from "@/app/lib/csrf";
 import { getDb } from "@/app/db/client";
 import { sql } from "drizzle-orm";
 
@@ -29,6 +30,7 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  if (!isSameOrigin(request)) return csrfError();
   try {
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();
     const tenant = await resolveTenant(xeroTenantId);

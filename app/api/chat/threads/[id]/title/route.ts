@@ -4,6 +4,7 @@ import { getEnv } from "@/app/lib/env";
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { resolveTenant } from "@/app/lib/tenant";
 import { updateConversation } from "@/app/lib/chat-store";
+import { isSameOrigin, csrfError } from "@/app/lib/csrf";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -12,6 +13,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  if (!isSameOrigin(request)) return csrfError();
   try {
     const { id } = await params;
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();
