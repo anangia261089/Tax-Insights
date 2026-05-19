@@ -15,8 +15,16 @@ const IRS_MAPPINGS: {
   { pattern: /wage|salary|salaries|payroll|contractor|subcontract|commission|bonus|staff/i, section: "§162(a)(1)", title: "Compensation" },
   // §179 — Accelerated Depreciation
   { pattern: /deprec|amortis|amortiz|fixed asset|equipment|machinery|computer|hardware|furniture/i, section: "§179", title: "Accelerated Depreciation" },
+  // §280A — Home Office
+  { pattern: /home office|home-office|work from home|residential office/i, section: "§280A", title: "Home Office" },
+  // §401/§408 — Retirement Plan Contributions
+  { pattern: /401k|401\(k\)|sep.?ira|simple ira|pension|profit.?sharing|retirement plan|keogh/i, section: "§401", title: "Retirement Plan Contributions" },
+  // §162(l) — Self-Employed Health Insurance
+  { pattern: /health insurance|medical insurance|dental insurance|vision insurance|self.?employed.*health|owner.*health/i, section: "§162(l)", title: "Self-Employed Health Insurance" },
+  // §164 — State & Local Taxes
+  { pattern: /state tax|local tax|property tax|franchise tax|sales tax paid|payroll tax|employer tax/i, section: "§164", title: "State & Local Taxes (SALT)" },
   // §162 — Ordinary & Necessary Business Expenses (broad catch-all)
-  { pattern: /fuel|gas|maintenance|repair|insurance|legal|lawyer|attorney|accounting|tax prep|advertis|marketing|promotion|office|supplies|rent|lease|utility|utilities|electric|water|internet|phone|telecom|postage|shipping|freight|travel|airfare|hotel|lodging|meal|entertain|subscription|software|cloud|hosting|printing|stationery|cleaning|security|training|education|conference|membership|dues|license|permit|consulting|professional fee|bank fee|bank charge|merchant fee|credit card fee/i, section: "§162", title: "Ordinary & Necessary Business Expenses" },
+  { pattern: /fuel|gas|maintenance|repair|insurance|legal|lawyer|attorney|accounting|tax prep|advertis|marketing|promotion|office|supplies|rent|lease|utility|utilities|electric|water|internet|phone|telecom|postage|shipping|freight|travel|airfare|hotel|lodging|meal|dining|restaurant|catering|entertain|subscription|software|cloud|hosting|printing|stationery|cleaning|security|training|education|conference|membership|dues|license|permit|consulting|professional fee|bank fee|bank charge|merchant fee|credit card fee/i, section: "§162", title: "Ordinary & Necessary Business Expenses" },
 ];
 
 function categoriseAccount(accountName: string): { section: string; title: string } {
@@ -34,21 +42,36 @@ function flagItem(item: DeductionItem, supplierPayments: Map<string, number>): D
     return { ...item, status: "review", reason: "Vehicle fuel expenses may need a mileage log for full deduction" };
   }
 
+  // Home office requires exclusive-use documentation
+  if (item.irsSection === "§280A") {
+    return { ...item, status: "review", reason: "Home office deduction requires a space used regularly and exclusively for business — calculate sq ft percentage" };
+  }
+
+  // Retirement contributions — flag as opportunity if not already maximized
+  if (item.irsSection === "§401") {
+    return { ...item, status: "review", reason: "Verify contribution limits: SEP-IRA up to 25% of net self-employment income; Solo 401(k) up to $69,000 for 2024" };
+  }
+
   // Legal costs that might mix personal/business
   if (/legal|lawyer|attorney/i.test(item.account)) {
     return { ...item, status: "review", reason: "Legal costs should be reviewed to confirm they are 100% business-related" };
   }
 
-  // Meals/entertainment — only 50% deductible
-  if (/meal|entertain|dining|restaurant/i.test(item.account)) {
-    return { ...item, status: "review", reason: "Meals and entertainment are generally only 50% deductible" };
+  // Entertainment: 0% deductible post-TCJA 2017
+  if (/entertain|concert|sport|golf|ticket|club|amuse/i.test(item.account)) {
+    return { ...item, status: "review", reason: "Entertainment expenses are not deductible post-TCJA (2018+) — verify this is a business meal, not entertainment" };
   }
 
-  // Contractor payments approaching 1099 threshold
+  // Business meals: 50% deductible
+  if (/meal|dining|restaurant|catering|food/i.test(item.account)) {
+    return { ...item, status: "review", reason: "Business meals are 50% deductible — keep receipts and document the business purpose" };
+  }
+
+  // Contractor payments at or above the 1099-NEC filing threshold
   if (/contractor|subcontract/i.test(item.account)) {
     for (const [name, total] of supplierPayments) {
-      if (total >= 500 && total < 700) {
-        return { ...item, status: "review", reason: `Payments to ${name} are near the $600 threshold — verify 1099 reporting` };
+      if (total >= 600) {
+        return { ...item, status: "review", reason: `Payments to ${name} ($${total.toLocaleString()}) meet or exceed the $600 threshold — Form 1099-NEC required` };
       }
     }
   }
@@ -254,14 +277,14 @@ export function analyseDeductions(
   if (potentialAdditional > 0) {
     nextSteps.push({
       step: "Consider §179 accelerated depreciation",
-      detail: `Up to $${potentialAdditional.toLocaleString()} in assets may qualify for immediate deduction`,
+      detail: `Up to $${potentialAdditional.toLocaleString()} in assets may qualify for immediate deduction. Note: §179 cannot create a net operating loss — deduction is limited to business taxable income. Also consider 40% bonus depreciation available for 2025.`,
       priority: "High",
     });
   }
 
-  // Check for 1099 reporting
+  // Suppliers at or above the 1099-NEC threshold
   const suppliersNear1099 = Array.from(supplierPayments.entries()).filter(
-    ([, total]) => total >= 500
+    ([, total]) => total >= 600
   );
   if (suppliersNear1099.length > 0) {
     nextSteps.push({
@@ -279,7 +302,7 @@ export function analyseDeductions(
 
   return {
     orgName,
-    fiscalYear: `${new Date().getFullYear() - 1}–${new Date().getFullYear()}`,
+    fiscalYear: `${new Date().getFullYear() - 1}`,
     totalDeductions,
     itemsNeedingReview,
     newOpportunities,

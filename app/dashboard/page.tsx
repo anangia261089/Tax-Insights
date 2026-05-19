@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Nav from "@/app/components/Nav";
 import TaxIntelligencePanel from "@/app/components/TaxIntelligencePanel";
+import Disclaimer from "@/app/components/Disclaimer";
 import type { TaxAnalysisResult } from "@/app/lib/types";
 
 export default function Dashboard() {
@@ -58,6 +59,9 @@ export default function Dashboard() {
             onReviewWithCleo={() => goToJax()}
             onAskCleo={(ctx) => goToJax(ctx)}
           />
+          <div className="max-w-5xl mx-auto px-6 pb-6">
+            <Disclaimer />
+          </div>
         </main>
       ) : null}
     </div>

@@ -5,10 +5,10 @@ export async function GET() {
   try {
     const { xero, tenantId } = await getAuthenticatedXero();
 
-    // Fetch Profit & Loss for the last fiscal year
-    const now = new Date();
-    const fromDate = `${now.getFullYear() - 1}-04-01`;
-    const toDate = `${now.getFullYear()}-03-31`;
+    // US calendar tax year (Jan 1 – Dec 31 of the prior year)
+    const year = new Date().getFullYear() - 1;
+    const fromDate = `${year}-01-01`;
+    const toDate = `${year}-12-31`;
 
     const response = await xero.accountingApi.getReportProfitAndLoss(
       tenantId,

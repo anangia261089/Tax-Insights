@@ -5,6 +5,7 @@ import { systemBlocks } from "@/app/lib/skills";
 import { getCachedAnalysis } from "@/app/lib/xero-cache";
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { resolveTenant } from "@/app/lib/tenant";
+import { checkRateLimit } from "@/app/lib/rate-limit";
 import {
   appendMessage,
   getOrCreateActiveConversation,
@@ -82,6 +83,21 @@ export async function POST(request: NextRequest) {
 
     // Auth + tenant (one resolve serves the whole request)
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();
+
+    // Rate limit: 10 requests per tenant per minute
+    const { allowed, retryAfterMs } = checkRateLimit(`explain:${xeroTenantId}`);
+    if (!allowed) {
+      return new Response(
+        JSON.stringify({ error: "Too many requests. Please wait before sending another message." }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(Math.ceil(retryAfterMs / 1000)),
+          },
+        }
+      );
+    }
 
     // Xero data pull (cached)
     const { result: analysisResult, cached } = await getCachedAnalysis({ forceRefresh });
