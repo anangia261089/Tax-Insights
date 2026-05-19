@@ -5,8 +5,8 @@ import type { TaxAnalysisResult } from "@/app/lib/types";
 
 interface Props {
   analysis: TaxAnalysisResult;
-  onReviewWithJax: () => void;
-  onAskJax: (context: string) => void;
+  onReviewWithCleo: () => void;
+  onAskCleo: (context: string) => void;
 }
 
 function fmt(n: number) {
@@ -47,7 +47,7 @@ function buildFlags(analysis: TaxAnalysisResult): TaxFlag[] {
   return flags.slice(0, 3);
 }
 
-export default function TaxIntelligencePanel({ analysis, onReviewWithJax, onAskJax }: Props) {
+export default function TaxIntelligencePanel({ analysis, onReviewWithCleo, onAskCleo }: Props) {
   const flags = buildFlags(analysis);
   const totalFlagged = flags.reduce((s, f) => s + f.amount, 0);
   const flaggedForCpa: TaxFlag[] = [];
@@ -87,7 +87,7 @@ export default function TaxIntelligencePanel({ analysis, onReviewWithJax, onAskJ
         </p>
         <div className="space-y-3">
           {flags.map((flag) => (
-            <DeductionFlag key={flag.id} flag={flag} onAskJax={onAskJax} onFlagForCpa={(f) => { if (!flaggedForCpa.find((x) => x.id === f.id)) flaggedForCpa.push(f); }} />
+            <DeductionFlag key={flag.id} flag={flag} onAskCleo={onAskCleo} onFlagForCpa={(f) => { if (!flaggedForCpa.find((x) => x.id === f.id)) flaggedForCpa.push(f); }} />
           ))}
         </div>
       </div>
@@ -98,12 +98,12 @@ export default function TaxIntelligencePanel({ analysis, onReviewWithJax, onAskJ
       {/* CTA */}
       <div className="flex flex-col items-center gap-2">
         <button
-          onClick={onReviewWithJax}
+          onClick={onReviewWithCleo}
           className="w-full max-w-sm py-3.5 bg-[#1B2A4A] text-white rounded-xl text-sm font-semibold hover:bg-[#253a5e] transition-colors"
         >
-          Review all with JAX
+          Review all with Cleo
         </button>
-        <p className="text-xs text-gray-400">JAX will walk through every category with you in plain English</p>
+        <p className="text-xs text-gray-400">Cleo will walk through every category with you in plain English</p>
       </div>
     </div>
   );

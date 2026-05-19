@@ -28,8 +28,8 @@ export default function Dashboard() {
 
   function goToJax(question?: string) {
     const url = question
-      ? `/dashboard/jax?q=${encodeURIComponent(question)}`
-      : "/dashboard/jax";
+      ? `/dashboard/cleo?q=${encodeURIComponent(question)}`
+      : "/dashboard/cleo";
     router.push(url);
   }
 
@@ -55,8 +55,8 @@ export default function Dashboard() {
         <main className="flex-1 overflow-y-auto">
           <TaxIntelligencePanel
             analysis={analysis}
-            onReviewWithJax={() => goToJax()}
-            onAskJax={(ctx) => goToJax(ctx)}
+            onReviewWithCleo={() => goToJax()}
+            onAskCleo={(ctx) => goToJax(ctx)}
           />
         </main>
       ) : null}

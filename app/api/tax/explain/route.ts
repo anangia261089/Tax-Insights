@@ -78,6 +78,7 @@ export async function POST(request: NextRequest) {
     const userQuestion: string = body.question || "Analyse my tax deductions";
     const uploads: UploadedDoc[] = Array.isArray(body.uploads) ? body.uploads : [];
     const forceRefresh: boolean = body.refresh === true;
+    const threadId: string | undefined = body.threadId;
 
     // Auth + tenant (one resolve serves the whole request)
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();
@@ -88,7 +89,9 @@ export async function POST(request: NextRequest) {
 
     // Ensure tenant row exists with current org name
     const tenant = await resolveTenant(xeroTenantId, orgName);
-    const conversation = await getOrCreateActiveConversation(tenant.id);
+    const conversation = threadId
+      ? { id: threadId }
+      : await getOrCreateActiveConversation(tenant.id);
 
     // Load server-side history. This is the source of truth, not the client.
     const priorMessages = await loadMessages({

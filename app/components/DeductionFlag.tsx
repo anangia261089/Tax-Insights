@@ -12,7 +12,7 @@ export interface TaxFlag {
 
 interface Props {
   flag: TaxFlag;
-  onAskJax: (context: string) => void;
+  onAskCleo: (context: string) => void;
   onFlagForCpa: (flag: TaxFlag) => void;
 }
 
@@ -26,7 +26,7 @@ const CONF = {
   low:    { label: "Needs review",    tag: "bg-red-100 text-red-600",           body: "bg-red-50"        },
 };
 
-export default function DeductionFlag({ flag, onAskJax, onFlagForCpa }: Props) {
+export default function DeductionFlag({ flag, onAskCleo, onFlagForCpa }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [flagged, setFlagged] = useState(false);
   const c = CONF[flag.confidence];
@@ -70,10 +70,10 @@ export default function DeductionFlag({ flag, onAskJax, onFlagForCpa }: Props) {
               </button>
             )}
             <button
-              onClick={() => onAskJax(`Tell me more about the ${flag.title} opportunity — I have ${fmt(flag.amount)} in this category.`)}
+              onClick={() => onAskCleo(`Tell me more about the ${flag.title} opportunity — I have ${fmt(flag.amount)} in this category.`)}
               className="px-3 py-1.5 text-xs font-semibold border border-gray-200 text-gray-700 rounded-lg hover:bg-white transition-colors"
             >
-              Ask JAX more →
+              Ask Cleo more →
             </button>
           </div>
         </div>

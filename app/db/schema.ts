@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, index, boolean } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const tenants = pgTable(
@@ -25,6 +25,7 @@ export const conversations = pgTable(
       .notNull()
       .references(() => tenants.id, { onDelete: "cascade" }),
     title: text("title"),
+    isPinned: boolean("is_pinned").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
