@@ -174,13 +174,16 @@ function CleoChat() {
 
   // Load threads list
   async function loadThreads(): Promise<Thread[]> {
-    const res = await fetch("/api/chat/threads");
-    if (res.status === 401) { window.location.href = "/api/auth/login"; return []; }
-    const data = await res.json();
-    const list: Thread[] = data.threads ?? [];
-    setThreads(list);
-    if (data.orgName) setOrgName(data.orgName);
-    return list;
+    try {
+      const res = await fetch("/api/chat/threads");
+      if (res.status === 401) { window.location.href = "/api/auth/login"; return []; }
+      if (!res.ok) return [];
+      const data = await res.json();
+      const list: Thread[] = data.threads ?? [];
+      setThreads(list);
+      if (data.orgName) setOrgName(data.orgName);
+      return list;
+    } catch { return []; }
   }
 
   // Load messages for a thread
@@ -224,13 +227,16 @@ function CleoChat() {
   }, [loading, activeThreadId]);
 
   async function createThread() {
-    const res = await fetch("/api/chat/threads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-    const data = await res.json();
-    const thread: Thread = data.thread;
-    setThreads((prev) => [thread, ...prev]);
-    setActiveThreadId(thread.id);
-    setMessages([]);
-    didAutoRun.current = false;
+    try {
+      const res = await fetch("/api/chat/threads", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      if (!res.ok) return;
+      const data = await res.json();
+      const thread: Thread = data.thread;
+      setThreads((prev) => [thread, ...prev]);
+      setActiveThreadId(thread.id);
+      setMessages([]);
+      didAutoRun.current = false;
+    } catch { /* ignore */ }
   }
 
   async function renameThread(threadId: string, title: string) {

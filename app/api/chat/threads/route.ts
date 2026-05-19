@@ -2,11 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { resolveTenant } from "@/app/lib/tenant";
 import { listConversations, createConversation } from "@/app/lib/chat-store";
+import { getDb } from "@/app/db/client";
+import { sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+async function ensureIsPinnedColumn() {
+  try {
+    await getDb().execute(sql`ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_pinned boolean NOT NULL DEFAULT false`);
+  } catch { /* already exists or no-op */ }
+}
+
 export async function GET() {
+  await ensureIsPinnedColumn();
   try {
     const { tenantId: xeroTenantId } = await getAuthenticatedXero();
     const tenant = await resolveTenant(xeroTenantId);
