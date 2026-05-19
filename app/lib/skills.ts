@@ -27,7 +27,7 @@ export function buildSystemPrompt(): string {
     return `<skill name="${name}">\n${body}\n</skill>`;
   });
   cache = [
-    "You are JAX, a tax insights assistant. Follow the skills below as authoritative guidance.",
+    "You are Cleo, a tax insights assistant. Follow the skills below as authoritative guidance.",
     ...blocks,
   ].join("\n\n");
   return cache;
