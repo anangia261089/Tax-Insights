@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Nav from "@/app/components/Nav";
 import TaxIntelligencePanel from "@/app/components/TaxIntelligencePanel";
+import EntityTypePicker from "@/app/components/EntityTypePicker";
 import Disclaimer from "@/app/components/Disclaimer";
-import type { TaxAnalysisResult } from "@/app/lib/types";
+import type { TaxAnalysisResult, EntityType } from "@/app/lib/types";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -13,6 +14,19 @@ export default function Dashboard() {
   const [analysis, setAnalysis] = useState<TaxAnalysisResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  function handleEntityTypeChange(type: EntityType) {
+    // Re-fetch analysis with the new entity type applied
+    setLoading(true);
+    fetch("/api/tax/analyse?refresh=1")
+      .then(async (res) => {
+        if (!res.ok) throw new Error("Failed to reload");
+        const data: TaxAnalysisResult = await res.json();
+        setAnalysis(data);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }
 
   useEffect(() => {
     fetch("/api/tax/analyse")
@@ -58,6 +72,12 @@ export default function Dashboard() {
             analysis={analysis}
             onReviewWithCleo={() => goToJax()}
             onAskCleo={(ctx) => goToJax(ctx)}
+            entityTypePicker={
+              <EntityTypePicker
+                current={analysis.entityType}
+                onSave={handleEntityTypeChange}
+              />
+            }
           />
           <div className="max-w-5xl mx-auto px-6 pb-6">
             <Disclaimer />

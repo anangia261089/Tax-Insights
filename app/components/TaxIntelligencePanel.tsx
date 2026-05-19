@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import DeductionFlag, { type TaxFlag } from "@/app/components/DeductionFlag";
 import type { TaxAnalysisResult } from "@/app/lib/types";
 
@@ -7,6 +8,7 @@ interface Props {
   analysis: TaxAnalysisResult;
   onReviewWithCleo: () => void;
   onAskCleo: (context: string) => void;
+  entityTypePicker?: React.ReactNode;
 }
 
 function fmt(n: number) {
@@ -47,7 +49,7 @@ function buildFlags(analysis: TaxAnalysisResult): TaxFlag[] {
   return flags.slice(0, 3);
 }
 
-export default function TaxIntelligencePanel({ analysis, onReviewWithCleo, onAskCleo }: Props) {
+export default function TaxIntelligencePanel({ analysis, onReviewWithCleo, onAskCleo, entityTypePicker }: Props) {
   const flags = buildFlags(analysis);
   const totalFlagged = flags.reduce((s, f) => s + f.amount, 0);
   const flaggedForCpa: TaxFlag[] = [];
@@ -61,9 +63,12 @@ export default function TaxIntelligencePanel({ analysis, onReviewWithCleo, onAsk
           Tax Intelligence
         </span>
         <h1 className="text-2xl font-bold text-gray-900">{analysis.orgName}</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          {analysis.fiscalYear} · Proactive deduction flags based on your Xero data
-        </p>
+        <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+          <p className="text-sm text-gray-500">
+            {analysis.fiscalYear} · Deduction flags based on your Xero data
+          </p>
+          {entityTypePicker}
+        </div>
       </div>
 
       {/* Stats */}

@@ -1,7 +1,8 @@
 import { getAuthenticatedXero } from "@/app/lib/xero-auth";
 import { analyseDeductions } from "@/app/lib/tax-engine";
 import { withRetry } from "@/app/lib/retry";
-import type { TaxAnalysisResult } from "@/app/lib/types";
+import { resolveTenant } from "@/app/lib/tenant";
+import type { TaxAnalysisResult, EntityType } from "@/app/lib/types";
 import type { XeroClient } from "xero-node";
 
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -17,7 +18,7 @@ interface CacheEntry {
 // for zero-dependency simplicity.
 const cache = new Map<string, CacheEntry>();
 
-async function fetchAndAnalyse(xero: XeroClient, tenantId: string): Promise<TaxAnalysisResult> {
+async function fetchAndAnalyse(xero: XeroClient, tenantId: string, entityType?: EntityType | null): Promise<TaxAnalysisResult> {
   // US calendar tax year: prior year Jan 1 – Dec 31
   const taxYear = new Date().getFullYear() - 1;
   const fromDate = `${taxYear}-01-01`;
@@ -56,7 +57,8 @@ async function fetchAndAnalyse(xero: XeroClient, tenantId: string): Promise<TaxA
     transactions,
     pnlRes.body.reports?.[0] || null,
     bsRes.body.reports?.[0] || null,
-    contacts
+    contacts,
+    entityType
   );
 }
 
@@ -67,14 +69,19 @@ export async function getCachedAnalysis(options: { forceRefresh?: boolean } = {}
 }> {
   const { xero, tenantId } = await getAuthenticatedXero();
 
+  // Load entity type from the tenant record so the tax engine uses correct rates
+  const tenant = await resolveTenant(tenantId);
+  const entityType = (tenant.entityType as EntityType | null) ?? null;
+
   if (!options.forceRefresh) {
     const entry = cache.get(tenantId);
-    if (entry && entry.expiresAt > Date.now()) {
+    // Invalidate cache if entity type changed since last fetch
+    if (entry && entry.expiresAt > Date.now() && entry.data.entityType === entityType) {
       return { tenantId, result: entry.data, cached: true };
     }
   }
 
-  const result = await fetchAndAnalyse(xero, tenantId);
+  const result = await fetchAndAnalyse(xero, tenantId, entityType);
   cache.set(tenantId, { data: result, expiresAt: Date.now() + TTL_MS });
   return { tenantId, result, cached: false };
 }

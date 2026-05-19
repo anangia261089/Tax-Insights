@@ -1,6 +1,7 @@
-import type { DeductionItem, TaxCategory, TaxAnalysisResult, NextStep } from "./types";
+import type { DeductionItem, TaxCategory, TaxAnalysisResult, NextStep, EntityType } from "./types";
+import { ENTITY_TAX_RATES, QBI_ELIGIBLE } from "./types";
 
-const EFFECTIVE_TAX_RATE = 0.232; // 23.2% for US SMBs
+const DEFAULT_TAX_RATE = 0.232; // fallback when entity type is unknown
 const SECTION_179_MAX = 1220000; // 2024 IRS limit
 
 // Map Xero account names/types to IRS sections
@@ -103,8 +104,10 @@ export function analyseDeductions(
   transactions: XeroTransaction[],
   pnlReport: XeroReport | null,
   balanceSheetReport: XeroReport | null,
-  contacts: XeroContact[]
+  contacts: XeroContact[],
+  entityType?: EntityType | null
 ): TaxAnalysisResult {
+  const effectiveTaxRate = entityType ? ENTITY_TAX_RATES[entityType] : DEFAULT_TAX_RATE;
   // Build supplier payment totals for 1099 tracking
   const supplierPayments = new Map<string, number>();
   for (const tx of transactions) {
@@ -126,6 +129,9 @@ export function analyseDeductions(
     return undefined;
   };
 
+  // Extract net profit from P&L summary rows (used for QBI estimate)
+  let netProfit: number | null = null;
+
   if (pnlReport?.rows) {
     for (const section of pnlReport.rows) {
       const sectionType = getField(section, "rowType", "RowType") as string;
@@ -135,6 +141,14 @@ export function analyseDeductions(
         for (const row of sectionRows) {
           const rowType = getField(row, "rowType", "RowType") as string;
           const cells = (getField(row, "cells", "Cells") || []) as Record<string, unknown>[];
+
+          if (rowType === "SummaryRow" && cells.length >= 2) {
+            const label = ((getField(cells[0], "value", "Value") || "") as string).toLowerCase();
+            if (/net (profit|income|loss)|profit for the (year|period)/.test(label)) {
+              const val = parseFloat((getField(cells[1], "value", "Value") || "0") as string);
+              if (!isNaN(val)) netProfit = val;
+            }
+          }
 
           if (rowType === "Row" && cells.length >= 2) {
             const accountName = (getField(cells[0], "value", "Value") || "") as string;
@@ -252,9 +266,9 @@ export function analyseDeductions(
     maxAllowable: SECTION_179_MAX,
     potentialAdditional,
     savingsByBusinessUse: [
-      { percentage: 100, savings: potentialAdditional * EFFECTIVE_TAX_RATE },
-      { percentage: 75, savings: potentialAdditional * 0.75 * EFFECTIVE_TAX_RATE },
-      { percentage: 50, savings: potentialAdditional * 0.50 * EFFECTIVE_TAX_RATE },
+      { percentage: 100, savings: potentialAdditional * effectiveTaxRate },
+      { percentage: 75, savings: potentialAdditional * 0.75 * effectiveTaxRate },
+      { percentage: 50, savings: potentialAdditional * 0.50 * effectiveTaxRate },
     ],
   };
 
@@ -294,6 +308,23 @@ export function analyseDeductions(
     });
   }
 
+  // §199A QBI deduction — only for pass-through entities
+  if (entityType && QBI_ELIGIBLE.has(entityType) && netProfit !== null && netProfit > 0) {
+    const qbiDeduction = netProfit * 0.20;
+    const qbiSavings = qbiDeduction * effectiveTaxRate;
+    nextSteps.push({
+      step: "Claim the §199A QBI deduction",
+      detail: `As a ${entityType.replace(/_/g, " ")}, you may deduct up to 20% of qualified business income. Based on estimated net profit of $${netProfit.toLocaleString()}, that's a ~$${Math.round(qbiDeduction).toLocaleString()} deduction worth ~$${Math.round(qbiSavings).toLocaleString()} in tax savings. Income phase-outs apply above $182,050 (single) / $364,200 (married) for 2024.`,
+      priority: "High",
+    });
+  } else if (!entityType) {
+    nextSteps.push({
+      step: "Set your entity type to unlock more insights",
+      detail: "Your tax rate, QBI eligibility (§199A), and SE tax strategy all depend on how your business is structured. Set your entity type in the dashboard to get accurate estimates.",
+      priority: "High",
+    });
+  }
+
   nextSteps.push({
     step: "Share with your tax advisor",
     detail: "Export this report and review with a qualified tax professional",
@@ -306,10 +337,12 @@ export function analyseDeductions(
     totalDeductions,
     itemsNeedingReview,
     newOpportunities,
-    estimatedTaxSavings: totalDeductions * EFFECTIVE_TAX_RATE,
-    effectiveTaxRate: EFFECTIVE_TAX_RATE,
+    estimatedTaxSavings: totalDeductions * effectiveTaxRate,
+    effectiveTaxRate,
     categories,
     section179,
     nextSteps,
+    entityType: entityType ?? null,
+    netProfit,
   };
 }

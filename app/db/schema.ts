@@ -26,6 +26,7 @@ export const tenants = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     xeroTenantId: text("xero_tenant_id").notNull().unique(),
     orgName: text("org_name"),
+    entityType: text("entity_type"),  // EntityType string, nullable until user sets it
     connectedAt: timestamp("connected_at", { withTimezone: true }).notNull().defaultNow(),
     lastActiveAt: timestamp("last_active_at", { withTimezone: true }).notNull().defaultNow(),
     disconnectScheduledAt: timestamp("disconnect_scheduled_at", { withTimezone: true }),
