@@ -49,7 +49,7 @@ export default function Home() {
 
       {/* Disclaimer */}
       <footer className="text-center py-4 text-xs text-gray-400 border-t border-gray-100">
-        JAX can make mistakes. Outputs are not financial, tax or legal advice.
+        Cleo can make mistakes. Outputs are not financial, tax or legal advice.
       </footer>
     </div>
   );
