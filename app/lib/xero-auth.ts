@@ -1,10 +1,12 @@
 import { getXeroClient } from "./xero-client";
 import { getSession } from "./session";
+import { getXeroSession, saveXeroSession } from "./xero-session-store";
 import type { XeroClient } from "xero-node";
 
 /**
  * Returns an authenticated XeroClient and tenantId, refreshing the token if needed.
- * Throws if not authenticated.
+ * Tokens live in the DB (xero_sessions); the cookie only holds the tenant ID pointer.
+ * Throws "Not authenticated" if the session or DB row is missing.
  */
 export async function getAuthenticatedXero(): Promise<{
   xero: XeroClient;
@@ -12,14 +14,19 @@ export async function getAuthenticatedXero(): Promise<{
 }> {
   const session = await getSession();
 
-  if (!session.xero) {
+  if (!session.xeroTenantId) {
+    throw new Error("Not authenticated");
+  }
+
+  const tenantId = session.xeroTenantId;
+  const stored = await getXeroSession(tenantId);
+
+  if (!stored) {
     throw new Error("Not authenticated");
   }
 
   const xero = getXeroClient();
-  const { accessToken, refreshToken, tenantId, expiresAt } = session.xero;
-
-  let currentAccessToken = accessToken;
+  let { accessToken, refreshToken, expiresAt } = stored;
   const now = Math.floor(Date.now() / 1000);
 
   if (now >= expiresAt) {
@@ -28,17 +35,13 @@ export async function getAuthenticatedXero(): Promise<{
       process.env.XERO_CLIENT_SECRET!,
       refreshToken
     );
-    currentAccessToken = newTokenSet.access_token!;
-    session.xero = {
-      ...session.xero,
-      accessToken: newTokenSet.access_token!,
-      refreshToken: newTokenSet.refresh_token || refreshToken,
-      expiresAt: Math.floor(Date.now() / 1000) + (newTokenSet.expires_in || 1800),
-    };
-    await session.save();
+    accessToken = newTokenSet.access_token!;
+    refreshToken = newTokenSet.refresh_token || refreshToken;
+    expiresAt = Math.floor(Date.now() / 1000) + (newTokenSet.expires_in || 1800);
+    await saveXeroSession(tenantId, { accessToken, refreshToken, expiresAt });
   }
 
-  xero.accountingApi.accessToken = currentAccessToken;
+  xero.accountingApi.accessToken = accessToken;
 
   return { xero, tenantId };
 }

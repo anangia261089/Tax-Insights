@@ -190,31 +190,33 @@ export async function POST(request: NextRequest) {
               }
             }
 
-            let followUps: string[] = [];
-            try {
-              followUps = await generateFollowUps(client, model, fullText, analysisResult);
-              send({ type: "followUps", questions: followUps });
-            } catch (err) {
-              console.error("Follow-up generation failed:", err);
-            }
+            // Send done immediately so the UI stops the streaming cursor.
+            // Follow-ups arrive shortly after via a second Claude call.
+            send({ type: "done" });
 
-            // Persist the assistant turn with metadata
+            // Persist the assistant turn now (without followUps) so a
+            // dropped connection doesn't lose the message.
             try {
               await appendMessage({
                 tenantId: tenant.id,
                 conversationId: conversation.id,
                 role: "assistant",
                 content: fullText,
-                metadata: {
-                  ...(isFollowUp ? {} : { analysisData: analysisResult }),
-                  ...(followUps.length > 0 ? { followUps } : {}),
-                },
+                metadata: isFollowUp ? undefined : { analysisData: analysisResult },
               });
             } catch (err) {
               console.error("Failed to persist assistant message:", err);
             }
 
-            send({ type: "done" });
+            // Generate follow-ups after done — the stream stays open until
+            // we close it, so the client still receives these events.
+            try {
+              const followUps = await generateFollowUps(client, model, fullText, analysisResult);
+              if (followUps.length > 0) send({ type: "followUps", questions: followUps });
+            } catch (err) {
+              console.error("Follow-up generation failed:", err);
+            }
+
             controller.close();
           } catch (error) {
             console.error("Stream error:", error);

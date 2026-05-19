@@ -1,13 +1,7 @@
-export interface XeroTokens {
-  accessToken: string;
-  refreshToken: string;
-  idToken: string;
-  tenantId: string;
-  expiresAt: number; // Unix timestamp
-}
-
+// Tokens are now stored in the xero_sessions DB table (encrypted).
+// The cookie only carries the Xero tenant ID as a pointer.
 export interface SessionData {
-  xero?: XeroTokens;
+  xeroTenantId?: string;
 }
 
 export interface DeductionItem {

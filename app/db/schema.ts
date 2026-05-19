@@ -1,5 +1,24 @@
-import { pgTable, uuid, text, timestamp, jsonb, index, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, index, boolean, bigint } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+
+// Stores Xero OAuth tokens server-side. The session cookie only holds the
+// session id — keeping JWTs out of the 4KB cookie budget.
+export const xeroSessions = pgTable(
+  "xero_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    xeroTenantId: text("xero_tenant_id").notNull().unique(),
+    // Tokens encrypted with AES-256-GCM using the same crypto module as messages
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    refreshTokenEncrypted: text("refresh_token_encrypted").notNull(),
+    expiresAt: bigint("expires_at", { mode: "number" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    tenantIdx: index("xero_sessions_tenant_idx").on(t.xeroTenantId),
+  })
+);
 
 export const tenants = pgTable(
   "tenants",
